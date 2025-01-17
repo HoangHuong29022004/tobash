@@ -30,12 +30,24 @@ if [ ! -f "/usr/sbin/php-fpm$PHP_VERSION" ]; then
     exit 1
 fi
 
-# Get domain name
+# Get domain name and validate
 read -p "Enter domain name: " DOMAIN
+# Remove special characters and convert to lowercase
+DOMAIN=$(echo "$DOMAIN" | tr -cd '[:alnum:].-' | tr '[:upper:]' '[:lower:]')
+
 if [ -z "$DOMAIN" ]; then
     echo -e "${RED}Domain name cannot be empty!${NORMAL}"
     exit 1
 fi
+
+# Validate domain name format
+if ! echo "$DOMAIN" | grep -qP '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$'; then
+    echo -e "${RED}Invalid domain name format! Only letters, numbers, hyphens and dots are allowed.${NORMAL}"
+    echo -e "${RED}Domain cannot start or end with hyphen.${NORMAL}"
+    exit 1
+fi
+
+echo -e "${BLUE}Using domain name: ${GREEN}$DOMAIN${NORMAL}"
 
 # Create project directory
 echo -e "${BLUE}Creating project directory...${NORMAL}"
@@ -85,12 +97,39 @@ server {
     server_name $DOMAIN;
     root /var/www/$DOMAIN/public;
 
-    ssl_certificate     /etc/ssl/certs/ssl-cert-snakeoil.pem;
-    ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
+    # SSL Configuration
+    ssl_certificate     /etc/ssl/certs/$DOMAIN.crt;
+    ssl_certificate_key /etc/ssl/private/$DOMAIN.key;
     
-    add_header X-Frame-Options "SAMEORIGIN";
-    add_header X-XSS-Protection "1; mode=block";
-    add_header X-Content-Type-Options "nosniff";
+    # Strong SSL Configuration
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+    
+    # SSL Session Configuration
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:SSL:50m;
+    ssl_session_tickets off;
+    ssl_buffer_size 4k;
+    
+    # OCSP Stapling
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    resolver 8.8.8.8 8.8.4.4 valid=300s;
+    resolver_timeout 5s;
+    
+    # Security Headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
+    add_header Permissions-Policy "interest-cohort=()" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    
+    # Other security measures
+    server_tokens off;
+    client_max_body_size 64M;
     
     index index.php index.html;
     charset utf-8;
@@ -127,12 +166,33 @@ if ! grep -q "127.0.0.1.*$DOMAIN" /etc/hosts; then
     check_status "Hosts file updated" || exit 1
 fi
 
-# Install SSL certificate if needed
-if [ ! -f "/etc/ssl/certs/ssl-cert-snakeoil.pem" ]; then
-    echo -e "${BLUE}Installing SSL certificate...${NORMAL}"
-    sudo apt-get install -y ssl-cert
-    sudo make-ssl-cert generate-default-snakeoil --force-overwrite
-    check_status "SSL certificate installed" || exit 1
+# Replace SSL certificate check and installation
+echo -e "${BLUE}Checking SSL certificates...${NORMAL}"
+if [ ! -f "/etc/ssl/certs/$DOMAIN.crt" ] || [ ! -f "/etc/ssl/private/$DOMAIN.key" ]; then
+    echo -e "${ORANGE}SSL certificates not found. Creating new self-signed certificates...${NORMAL}"
+    
+    # Create directories if they don't exist
+    sudo mkdir -p /etc/ssl/certs
+    sudo mkdir -p /etc/ssl/private
+    
+    # Generate private key and CSR
+    sudo openssl req -x509 -newkey rsa:4096 \
+        -keyout "/etc/ssl/private/$DOMAIN.key" \
+        -out "/etc/ssl/certs/$DOMAIN.crt" \
+        -days 365 -nodes \
+        -subj "/C=VN/ST=Hanoi/L=Hoan Kiem/O=MyCompany/OU=IT Department/CN=$DOMAIN/emailAddress=huongchaytool5@gmail.com" \
+        -addext "subjectAltName=DNS:$DOMAIN,DNS:*.$DOMAIN"
+    
+    check_status "SSL certificates generated" || exit 1
+    
+    # Update permissions
+    sudo chmod 644 "/etc/ssl/certs/$DOMAIN.crt"
+    sudo chmod 600 "/etc/ssl/private/$DOMAIN.key"
+    
+    # Add to trusted certificates
+    sudo cp "/etc/ssl/certs/$DOMAIN.crt" "/usr/local/share/ca-certificates/$DOMAIN.crt"
+    sudo update-ca-certificates
+    check_status "Certificate added to trusted store" || exit 1
 fi
 
 # Test and restart Nginx
@@ -143,3 +203,16 @@ check_status "Nginx restarted" || exit 1
 echo -e "\n${GREEN}Virtual host created successfully!${NORMAL}"
 echo -e "${ORANGE}Site available at: https://$DOMAIN${NORMAL}"
 echo -e "${ORANGE}Project folder: /var/www/$DOMAIN${NORMAL}"
+
+# After creating SSL certificates
+echo -e "\n${ORANGE}Important Security Notice:${NORMAL}"
+echo -e "This site is using a self-signed SSL certificate for development purposes."
+echo -e "For production use, please install a proper SSL certificate from a trusted Certificate Authority."
+echo -e "You can use Let's Encrypt to get a free trusted SSL certificate.\n"
+
+echo -e "${BLUE}To trust this certificate on your local machine:${NORMAL}"
+echo -e "1. Firefox: Go to Preferences -> Privacy & Security -> View Certificates -> Import"
+echo -e "2. Chrome: Go to Settings -> Privacy and security -> Security -> Manage certificates -> Import"
+echo -e "3. System-wide: Copy the certificate to your system's trust store:"
+echo -e "   ${GREEN}sudo cp /etc/ssl/certs/nginx.crt /usr/local/share/ca-certificates/${DOMAIN}.crt"
+echo -e "   sudo update-ca-certificates${NORMAL}\n"
