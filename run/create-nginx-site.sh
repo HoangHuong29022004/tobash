@@ -112,11 +112,11 @@ server {
     ssl_session_tickets off;
     ssl_buffer_size 4k;
     
-    # OCSP Stapling
-    ssl_stapling on;
-    ssl_stapling_verify on;
-    resolver 8.8.8.8 8.8.4.4 valid=300s;
-    resolver_timeout 5s;
+    # Remove OCSP Stapling for self-signed certificates
+    # ssl_stapling on;
+    # ssl_stapling_verify on;
+    # resolver 8.8.8.8 8.8.4.4 valid=300s;
+    # resolver_timeout 5s;
     
     # Security Headers
     add_header X-Frame-Options "SAMEORIGIN" always;
@@ -207,12 +207,82 @@ echo -e "${ORANGE}Project folder: /var/www/$DOMAIN${NORMAL}"
 # After creating SSL certificates
 echo -e "\n${ORANGE}Important Security Notice:${NORMAL}"
 echo -e "This site is using a self-signed SSL certificate for development purposes."
-echo -e "For production use, please install a proper SSL certificate from a trusted Certificate Authority."
-echo -e "You can use Let's Encrypt to get a free trusted SSL certificate.\n"
+echo -e "To remove the security warning, follow these steps:\n"
 
-echo -e "${BLUE}To trust this certificate on your local machine:${NORMAL}"
-echo -e "1. Firefox: Go to Preferences -> Privacy & Security -> View Certificates -> Import"
-echo -e "2. Chrome: Go to Settings -> Privacy and security -> Security -> Manage certificates -> Import"
-echo -e "3. System-wide: Copy the certificate to your system's trust store:"
-echo -e "   ${GREEN}sudo cp /etc/ssl/certs/nginx.crt /usr/local/share/ca-certificates/${DOMAIN}.crt"
-echo -e "   sudo update-ca-certificates${NORMAL}\n"
+# Windows Hosts and Certificate Setup
+echo -e "${BLUE}Setting up Windows configuration:${NORMAL}"
+
+# Copy certificate to Windows temp directory
+echo -e "1. Copying certificate to Windows..."
+WINDOWS_TEMP="/mnt/c/Windows/Temp"
+if [ -d "$WINDOWS_TEMP" ]; then
+    sudo cp "/etc/ssl/certs/$DOMAIN.crt" "$WINDOWS_TEMP/$DOMAIN.crt"
+    check_status "Certificate copied to Windows" || exit 1
+
+    # Create PowerShell script to import certificate
+    echo -e "2. Creating certificate import script..."
+    cat > "$WINDOWS_TEMP/import-cert.ps1" << EOF
+# Import certificate to Windows trust store
+\$cert = Import-Certificate -FilePath "C:\\Windows\\Temp\\$DOMAIN.crt" -CertStoreLocation Cert:\\LocalMachine\\Root
+if(\$?) {
+    Write-Host "Certificate imported successfully"
+    # Clean up
+    Remove-Item "C:\\Windows\\Temp\\$DOMAIN.crt"
+    Remove-Item "C:\\Windows\\Temp\\import-cert.ps1"
+}
+EOF
+    check_status "Import script created"
+
+    echo -e "${GREEN}To complete Windows setup, run these commands in PowerShell as Administrator:${NORMAL}"
+    echo -e "   ${ORANGE}cd C:\\Windows\\Temp${NORMAL}"
+    echo -e "   ${ORANGE}Set-ExecutionPolicy Bypass -Scope Process -Force${NORMAL}"
+    echo -e "   ${ORANGE}.\\import-cert.ps1${NORMAL}"
+fi
+
+# Update Windows hosts file
+echo -e "\n${BLUE}Updating Windows hosts file:${NORMAL}"
+WINDOWS_HOSTS="/mnt/c/Windows/System32/drivers/etc/hosts"
+if [ -f "$WINDOWS_HOSTS" ]; then
+    # Create PowerShell script to update hosts file
+    cat > "$WINDOWS_TEMP/update-hosts.ps1" << EOF
+# Check if hosts entry exists
+\$hostsPath = "C:\\Windows\\System32\\drivers\\etc\\hosts"
+\$hostsContent = Get-Content \$hostsPath
+\$newEntry = "127.0.0.1       $DOMAIN"
+
+if (-not (\$hostsContent -contains \$newEntry)) {
+    Add-Content -Path \$hostsPath -Value \$newEntry -Force
+    Write-Host "Hosts file updated successfully"
+}
+else {
+    Write-Host "Domain already exists in hosts file"
+}
+
+# Clean up
+Remove-Item "C:\\Windows\\Temp\\update-hosts.ps1"
+EOF
+    check_status "Hosts update script created"
+
+    # Execute PowerShell script automatically
+    echo -e "${BLUE}Executing PowerShell script to update hosts file...${NORMAL}"
+    powershell.exe -ExecutionPolicy Bypass -Command "Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -File C:\\Windows\\Temp\\update-hosts.ps1' -Verb RunAs -Wait"
+    
+    # Check if the domain was added successfully
+    if grep -q "127.0.0.1.*$DOMAIN" "$WINDOWS_HOSTS"; then
+        echo -e "${GREEN}Windows hosts file updated successfully${NORMAL}"
+    else
+        echo -e "${ORANGE}Please run these commands manually in PowerShell as Administrator:${NORMAL}"
+        echo -e "   ${ORANGE}cd C:\\Windows\\Temp${NORMAL}"
+        echo -e "   ${ORANGE}Set-ExecutionPolicy Bypass -Scope Process -Force${NORMAL}"
+        echo -e "   ${ORANGE}.\\update-hosts.ps1${NORMAL}"
+    fi
+fi
+
+echo -e "\n${BLUE}Additional steps for browsers:${NORMAL}"
+echo -e "1. Firefox: Settings -> Privacy & Security -> View Certificates -> Import"
+echo -e "2. Chrome/Edge: Settings -> Privacy and security -> Security -> Manage certificates -> Import"
+echo -e "${ORANGE}Note: After importing the certificate, please restart your browsers${NORMAL}\n"
+
+echo -e "${GREEN}Setup completed!${NORMAL}"
+echo -e "Site available at: ${ORANGE}https://$DOMAIN${NORMAL}"
+echo -e "Project folder: ${ORANGE}/var/www/$DOMAIN${NORMAL}\n"
