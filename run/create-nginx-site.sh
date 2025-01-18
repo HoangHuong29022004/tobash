@@ -17,37 +17,46 @@ check_status() {
     fi
 }
 
-echo -e "${BLUE}=== Create Virtual Host ===${NORMAL}"
+echo -e "${BLUE}=== Tạo Virtual Host ===${NORMAL}"
 
-# Get PHP version
-echo -e "${BLUE}Available PHP versions:${NORMAL}"
+# Set default PHP version
+DEFAULT_PHP="8.2"
+PHP_VERSION=$DEFAULT_PHP
+
+# Show available PHP versions and allow change
+echo -e "${BLUE}Phiên bản PHP hiện có:${NORMAL}"
 ls /usr/sbin/php-fpm* | grep -o 'php-fpm[0-9.]*' | sort
-read -p "Enter PHP version (e.g., 8.2): " PHP_VERSION
+echo -e "${GREEN}Mặc định sử dụng PHP $DEFAULT_PHP${NORMAL}"
+read -p "Bạn có muốn đổi phiên bản PHP không? (y/N): " change_php
+
+if [ "$change_php" = "y" ] || [ "$change_php" = "Y" ]; then
+    read -p "Nhập phiên bản PHP (vd: 8.3): " PHP_VERSION
+fi
 
 # Validate PHP version
 if [ ! -f "/usr/sbin/php-fpm$PHP_VERSION" ]; then
-    echo -e "${RED}PHP-FPM version $PHP_VERSION not found!${NORMAL}"
+    echo -e "${RED}Không tìm thấy PHP-FPM phiên bản $PHP_VERSION!${NORMAL}"
     exit 1
 fi
 
 # Get domain name and validate
-read -p "Enter domain name: " DOMAIN
+read -p "Nhập tên miền (vd: project.code): " DOMAIN
 # Remove special characters and convert to lowercase
 DOMAIN=$(echo "$DOMAIN" | tr -cd '[:alnum:].-' | tr '[:upper:]' '[:lower:]')
 
 if [ -z "$DOMAIN" ]; then
-    echo -e "${RED}Domain name cannot be empty!${NORMAL}"
+    echo -e "${RED}Tên miền không được để trống!${NORMAL}"
     exit 1
 fi
 
 # Validate domain name format
 if ! echo "$DOMAIN" | grep -qP '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$'; then
-    echo -e "${RED}Invalid domain name format! Only letters, numbers, hyphens and dots are allowed.${NORMAL}"
-    echo -e "${RED}Domain cannot start or end with hyphen.${NORMAL}"
+    echo -e "${RED}Tên miền không hợp lệ! Chỉ được phép dùng chữ cái, số, dấu gạch ngang và dấu chấm.${NORMAL}"
+    echo -e "${RED}Tên miền không được bắt đầu hoặc kết thúc bằng dấu gạch ngang.${NORMAL}"
     exit 1
 fi
 
-echo -e "${BLUE}Using domain name: ${GREEN}$DOMAIN${NORMAL}"
+echo -e "${BLUE}Sử dụng tên miền: ${GREEN}$DOMAIN${NORMAL}"
 
 # Create project directory
 echo -e "${BLUE}Creating project directory...${NORMAL}"
@@ -82,7 +91,7 @@ EOF
 check_status "Index.php created" || exit 1
 
 # Create Nginx configuration
-echo -e "${BLUE}Creating Nginx configuration...${NORMAL}"
+echo -e "${BLUE}Tạo cấu hình Nginx...${NORMAL}"
 sudo tee "/etc/nginx/sites-available/$DOMAIN" > /dev/null << EOF
 server {
     listen 80;
@@ -101,35 +110,9 @@ server {
     ssl_certificate     /etc/ssl/certs/$DOMAIN.crt;
     ssl_certificate_key /etc/ssl/private/$DOMAIN.key;
     
-    # Strong SSL Configuration
+    # SSL Configuration
     ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers off;
     ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
-    
-    # SSL Session Configuration
-    ssl_session_timeout 1d;
-    ssl_session_cache shared:SSL:50m;
-    ssl_session_tickets off;
-    ssl_buffer_size 4k;
-    
-    # Remove OCSP Stapling for self-signed certificates
-    # ssl_stapling on;
-    # ssl_stapling_verify on;
-    # resolver 8.8.8.8 8.8.4.4 valid=300s;
-    # resolver_timeout 5s;
-    
-    # Security Headers
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-XSS-Protection "1; mode=block" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
-    add_header Permissions-Policy "interest-cohort=()" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    
-    # Other security measures
-    server_tokens off;
-    client_max_body_size 64M;
     
     index index.php index.html;
     charset utf-8;
@@ -152,137 +135,104 @@ server {
     }
 }
 EOF
-check_status "Nginx configuration created" || exit 1
+check_status "Đã tạo cấu hình Nginx" || exit 1
 
-# Create symbolic link
-echo -e "${BLUE}Creating symbolic link...${NORMAL}"
-sudo ln -sf "/etc/nginx/sites-available/$DOMAIN" "/etc/nginx/sites-enabled/"
-check_status "Symbolic link created" || exit 1
-
-# Update hosts file
-echo -e "${BLUE}Updating hosts file...${NORMAL}"
-if ! grep -q "127.0.0.1.*$DOMAIN" /etc/hosts; then
-    echo "127.0.0.1       $DOMAIN" | sudo tee -a /etc/hosts > /dev/null
-    check_status "Hosts file updated" || exit 1
-fi
-
-# Replace SSL certificate check and installation
-echo -e "${BLUE}Checking SSL certificates...${NORMAL}"
+# Tạo SSL certificate
+echo -e "${BLUE}Tạo SSL certificate...${NORMAL}"
 if [ ! -f "/etc/ssl/certs/$DOMAIN.crt" ] || [ ! -f "/etc/ssl/private/$DOMAIN.key" ]; then
-    echo -e "${ORANGE}SSL certificates not found. Creating new self-signed certificates...${NORMAL}"
-    
-    # Create directories if they don't exist
     sudo mkdir -p /etc/ssl/certs
     sudo mkdir -p /etc/ssl/private
     
-    # Generate private key and CSR
-    sudo openssl req -x509 -newkey rsa:4096 \
+    sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
         -keyout "/etc/ssl/private/$DOMAIN.key" \
         -out "/etc/ssl/certs/$DOMAIN.crt" \
-        -days 365 -nodes \
-        -subj "/C=VN/ST=Hanoi/L=Hoan Kiem/O=MyCompany/OU=IT Department/CN=$DOMAIN/emailAddress=huongchaytool5@gmail.com" \
-        -addext "subjectAltName=DNS:$DOMAIN,DNS:*.$DOMAIN"
+        -subj "/CN=$DOMAIN" \
+        -addext "subjectAltName=DNS:$DOMAIN"
     
-    check_status "SSL certificates generated" || exit 1
+    check_status "Đã tạo SSL certificate" || exit 1
     
-    # Update permissions
     sudo chmod 644 "/etc/ssl/certs/$DOMAIN.crt"
     sudo chmod 600 "/etc/ssl/private/$DOMAIN.key"
-    
-    # Add to trusted certificates
-    sudo cp "/etc/ssl/certs/$DOMAIN.crt" "/usr/local/share/ca-certificates/$DOMAIN.crt"
-    sudo update-ca-certificates
-    check_status "Certificate added to trusted store" || exit 1
 fi
 
-# Test and restart Nginx
-echo -e "${BLUE}Testing Nginx configuration...${NORMAL}"
-sudo nginx -t && sudo service nginx restart
-check_status "Nginx restarted" || exit 1
-
-echo -e "\n${GREEN}Virtual host created successfully!${NORMAL}"
-echo -e "${ORANGE}Site available at: https://$DOMAIN${NORMAL}"
-echo -e "${ORANGE}Project folder: /var/www/$DOMAIN${NORMAL}"
-
-# After creating SSL certificates
-echo -e "\n${ORANGE}Important Security Notice:${NORMAL}"
-echo -e "This site is using a self-signed SSL certificate for development purposes."
-echo -e "To remove the security warning, follow these steps:\n"
-
-# Windows Hosts and Certificate Setup
-echo -e "${BLUE}Setting up Windows configuration:${NORMAL}"
-
-# Copy certificate to Windows temp directory
-echo -e "1. Copying certificate to Windows..."
-WINDOWS_TEMP="/mnt/c/Windows/Temp"
-if [ -d "$WINDOWS_TEMP" ]; then
-    sudo cp "/etc/ssl/certs/$DOMAIN.crt" "$WINDOWS_TEMP/$DOMAIN.crt"
-    check_status "Certificate copied to Windows" || exit 1
-
-    # Create PowerShell script to import certificate
-    echo -e "2. Creating certificate import script..."
-    cat > "$WINDOWS_TEMP/import-cert.ps1" << EOF
-# Import certificate to Windows trust store
-\$cert = Import-Certificate -FilePath "C:\\Windows\\Temp\\$DOMAIN.crt" -CertStoreLocation Cert:\\LocalMachine\\Root
-if(\$?) {
-    Write-Host "Certificate imported successfully"
-    # Clean up
-    Remove-Item "C:\\Windows\\Temp\\$DOMAIN.crt"
-    Remove-Item "C:\\Windows\\Temp\\import-cert.ps1"
-}
-EOF
-    check_status "Import script created"
-
-    echo -e "${GREEN}To complete Windows setup, run these commands in PowerShell as Administrator:${NORMAL}"
-    echo -e "   ${ORANGE}cd C:\\Windows\\Temp${NORMAL}"
-    echo -e "   ${ORANGE}Set-ExecutionPolicy Bypass -Scope Process -Force${NORMAL}"
-    echo -e "   ${ORANGE}.\\import-cert.ps1${NORMAL}"
-fi
+# Create symbolic link
+echo -e "${BLUE}Tạo symbolic link...${NORMAL}"
+sudo ln -sf "/etc/nginx/sites-available/$DOMAIN" "/etc/nginx/sites-enabled/"
+check_status "Đã tạo symbolic link" || exit 1
 
 # Update Windows hosts file
-echo -e "\n${BLUE}Updating Windows hosts file:${NORMAL}"
+echo -e "\n${BLUE}Đang cập nhật file hosts của Windows...${NORMAL}"
+WINDOWS_TEMP="/mnt/c/Windows/Temp"
 WINDOWS_HOSTS="/mnt/c/Windows/System32/drivers/etc/hosts"
+
 if [ -f "$WINDOWS_HOSTS" ]; then
-    # Create PowerShell script to update hosts file
-    cat > "$WINDOWS_TEMP/update-hosts.ps1" << EOF
-# Check if hosts entry exists
-\$hostsPath = "C:\\Windows\\System32\\drivers\\etc\\hosts"
-\$hostsContent = Get-Content \$hostsPath
-\$newEntry = "127.0.0.1       $DOMAIN"
+    # Create PowerShell script
+    cat > "$WINDOWS_TEMP/update-hosts.ps1" << 'EOF'
+# Run as Administrator
+$ErrorActionPreference = "Stop"
 
-if (-not (\$hostsContent -contains \$newEntry)) {
-    Add-Content -Path \$hostsPath -Value \$newEntry -Force
-    Write-Host "Hosts file updated successfully"
-}
-else {
-    Write-Host "Domain already exists in hosts file"
+$hostsFile = "C:\Windows\System32\drivers\etc\hosts"
+$entry = "127.0.0.1       DOMAIN_PLACEHOLDER"
+
+# Ensure running as Administrator
+if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
+    Write-Warning "Requires Administrator privileges"
+    exit 1
 }
 
-# Clean up
-Remove-Item "C:\\Windows\\Temp\\update-hosts.ps1"
+try {
+    # Take ownership and grant full permissions
+    $acl = Get-Acl $hostsFile
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($identity.Name, "FullControl", "Allow")
+    $acl.AddAccessRule($rule)
+    Set-Acl -Path $hostsFile -AclObject $acl
+
+    # Read and update hosts file
+    $content = Get-Content $hostsFile
+    if (-not ($content -contains $entry)) {
+        Add-Content -Path $hostsFile -Value $entry -Force
+        Write-Host "Domain added successfully"
+    } else {
+        Write-Host "Domain already exists"
+    }
+} catch {
+    Write-Error $_.Exception.Message
+    exit 1
+} finally {
+    # Reset permissions
+    icacls $hostsFile /reset
+}
 EOF
-    check_status "Hosts update script created"
 
-    # Execute PowerShell script automatically
-    echo -e "${BLUE}Executing PowerShell script to update hosts file...${NORMAL}"
-    powershell.exe -ExecutionPolicy Bypass -Command "Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -File C:\\Windows\\Temp\\update-hosts.ps1' -Verb RunAs -Wait"
+    # Replace placeholder with actual domain
+    sed -i "s/DOMAIN_PLACEHOLDER/$DOMAIN/g" "$WINDOWS_TEMP/update-hosts.ps1"
+
+    echo -e "${BLUE}Đang thêm domain vào file hosts...${NORMAL}"
     
-    # Check if the domain was added successfully
+    # Execute PowerShell script
+    powershell.exe -ExecutionPolicy Bypass -Command "Start-Process PowerShell -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File C:\Windows\Temp\update-hosts.ps1' -Verb RunAs -Wait"
+
+    # Verify update
+    sleep 2
     if grep -q "127.0.0.1.*$DOMAIN" "$WINDOWS_HOSTS"; then
-        echo -e "${GREEN}Windows hosts file updated successfully${NORMAL}"
+        echo -e "${GREEN}✓ Đã cập nhật file hosts thành công${NORMAL}"
     else
-        echo -e "${ORANGE}Please run these commands manually in PowerShell as Administrator:${NORMAL}"
-        echo -e "   ${ORANGE}cd C:\\Windows\\Temp${NORMAL}"
-        echo -e "   ${ORANGE}Set-ExecutionPolicy Bypass -Scope Process -Force${NORMAL}"
-        echo -e "   ${ORANGE}.\\update-hosts.ps1${NORMAL}"
+        echo -e "${ORANGE}Không thể tự động cập nhật. Vui lòng thêm thủ công dòng sau vào file:${NORMAL}"
+        echo -e "${ORANGE}C:\\Windows\\System32\\drivers\\etc\\hosts${NORMAL}"
+        echo -e "${GREEN}127.0.0.1       $DOMAIN${NORMAL}"
+        
+        # Create backup file
+        echo "127.0.0.1       $DOMAIN" > "$WINDOWS_TEMP/host-entry.txt"
+        echo -e "${BLUE}Đã lưu nội dung cần thêm vào: ${NORMAL}C:\\Windows\\Temp\\host-entry.txt"
     fi
 fi
 
-echo -e "\n${BLUE}Additional steps for browsers:${NORMAL}"
-echo -e "1. Firefox: Settings -> Privacy & Security -> View Certificates -> Import"
-echo -e "2. Chrome/Edge: Settings -> Privacy and security -> Security -> Manage certificates -> Import"
-echo -e "${ORANGE}Note: After importing the certificate, please restart your browsers${NORMAL}\n"
+# Kiểm tra và khởi động lại Nginx
+echo -e "${BLUE}Kiểm tra cấu hình Nginx...${NORMAL}"
+sudo nginx -t && sudo service nginx restart
+check_status "Đã khởi động lại Nginx" || exit 1
 
-echo -e "${GREEN}Setup completed!${NORMAL}"
-echo -e "Site available at: ${ORANGE}https://$DOMAIN${NORMAL}"
-echo -e "Project folder: ${ORANGE}/var/www/$DOMAIN${NORMAL}\n"
+echo -e "\n${GREEN}=== Hoàn tất! ===${NORMAL}"
+echo -e "Website: ${ORANGE}https://$DOMAIN${NORMAL}"
+echo -e "Thư mục: ${ORANGE}/var/www/$DOMAIN${NORMAL}\n"
