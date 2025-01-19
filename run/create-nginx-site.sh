@@ -60,10 +60,21 @@ echo -e "${BLUE}Sử dụng tên miền: ${GREEN}$DOMAIN${NORMAL}"
 
 # Create project directory
 echo -e "${BLUE}Creating project directory...${NORMAL}"
+
+# Kiểm tra và cài đặt gói acl nếu chưa có
+if ! command -v setfacl &> /dev/null; then
+    echo -e "${BLUE}Đang cài đặt gói acl...${NORMAL}"
+    sudo apt-get update && sudo apt-get install -y acl
+    check_status "Cài đặt gói acl" || exit 1
+fi
+
 sudo mkdir -p "/var/www/$DOMAIN/public"
 sudo chown -R $USER:www-data "/var/www/$DOMAIN"
 sudo chmod -R 775 "/var/www/$DOMAIN"
 sudo chmod g+s "/var/www/$DOMAIN"
+# Cấp full quyền cho thư mục
+sudo setfacl -R -d -m u:$USER:rwx,g:www-data:rwx "/var/www/$DOMAIN"
+sudo setfacl -R -m u:$USER:rwx,g:www-data:rwx "/var/www/$DOMAIN"
 check_status "Project directory created and permissions set" || exit 1
 
 # Create index.php
