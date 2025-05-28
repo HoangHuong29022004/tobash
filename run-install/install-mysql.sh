@@ -1,33 +1,42 @@
 #!/bin/bash
 
-# Colors for output
-NORMAL="\\033[0;39m"
-GREEN="\\033[1;32m"
-RED="\\033[1;31m"
-BLUE="\\033[1;34m"
-ORANGE="\\033[1;33m"
+# Màu sắc cho output
+NORMAL="\033[0;39m"
+GREEN="\033[1;32m"
+RED="\033[1;31m"
+BLUE="\033[1;34m"
+ORANGE="\033[1;33m"
 
-echo -e "${BLUE}=== MySQL Server Installation Script ===${NORMAL}"
+echo -e "${BLUE}=== Cài đặt MySQL Server ===${NORMAL}"
+
+# Cập nhật package list
+echo -e "${GREEN}Đang cập nhật package list...${NORMAL}"
+sudo apt update
+
+# Cài đặt MySQL Server
+echo -e "${GREEN}Đang cài đặt MySQL Server...${NORMAL}"
+sudo apt install -y mysql-server
+
+# Khởi động MySQL
+echo -e "${GREEN}Đang khởi động MySQL...${NORMAL}"
+sudo systemctl start mysql
+sudo systemctl enable mysql
+
+# Cấu hình root không mật khẩu
+echo -e "${GREEN}Đang cấu hình tài khoản root...${NORMAL}"
+sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '';"
+sudo mysql -e "FLUSH PRIVILEGES;"
+
+# Hiển thị thông tin
+echo -e "${BLUE}Phiên bản MySQL: ${NORMAL}$(mysql --version)"
+echo -e "${BLUE}Tài khoản root đã được cấu hình không mật khẩu${NORMAL}"
+echo -e "${BLUE}Để kết nối MySQL: mysql -u root${NORMAL}"
 
 # Check if MySQL is already installed
 if command -v mysql &> /dev/null; then
     echo -e "${GREEN}MySQL is already installed!${NORMAL}"
     echo -e "${BLUE}MySQL version: ${NORMAL}$(mysql --version)"
     exit 0
-fi
-
-# Update package list
-echo -e "${GREEN}Updating package list...${NORMAL}"
-sudo apt update
-
-# Install MySQL Server
-echo -e "${GREEN}Installing MySQL Server...${NORMAL}"
-sudo apt install -y mysql-server
-
-# Check if installation was successful
-if [ $? -ne 0 ]; then
-    echo -e "${RED}MySQL installation failed!${NORMAL}"
-    exit 1
 fi
 
 # Start MySQL service
